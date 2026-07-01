@@ -152,11 +152,25 @@ export class TracedRequestError extends Error {
   }
 }
 
-/** Snapshot every response header (names lower-cased). */
+/**
+ * Snapshot every response header the runtime exposes.
+ * Names are lower-cased; multi-value headers are joined with ", ".
+ *
+ * Note: Node/undici `fetch` only gives us what `Headers` enumerates — if X
+ * never sent `x-transaction-id` on this response (common on some 401 paths),
+ * or an intermediary stripped it, it will not appear here.
+ */
 function snapshotHeaders(headers: Headers): Record<string, string> {
   const out: Record<string, string> = {};
+  // forEach + entries cover the same set; use entries for multi-value joins.
+  for (const [key, value] of headers.entries()) {
+    const k = key.toLowerCase();
+    out[k] = out[k] ? `${out[k]}, ${value}` : value;
+  }
+  // Also walk forEach in case a runtime only implements one iterator.
   headers.forEach((value, key) => {
-    out[key.toLowerCase()] = value;
+    const k = key.toLowerCase();
+    if (!(k in out)) out[k] = value;
   });
   return out;
 }

@@ -224,7 +224,8 @@ body {
   margin-bottom: 8px;
 }
 
-.trace-raw pre {
+.trace-raw pre,
+.trace-headers {
   margin: 0;
   padding: 10px 12px;
   background: #000;
@@ -236,4 +237,6 @@ body {
   font-size: 12px;
   line-height: 1.45;
   color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
 }

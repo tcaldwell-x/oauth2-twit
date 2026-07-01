@@ -29,6 +29,12 @@ function formatNumber(n: number): string {
 
 /** Renders the outbound request trace for a failed X API / OAuth call. */
 function TracePanel({ trace }: { trace: RequestTrace }) {
+  const headerEntries = trace.responseHeaders
+    ? Object.entries(trace.responseHeaders).sort(([a], [b]) =>
+        a.localeCompare(b)
+      )
+    : [];
+
   return (
     <div className="trace" role="region" aria-label="Request trace">
       <p className="trace-title">Request trace</p>
@@ -53,12 +59,6 @@ function TracePanel({ trace }: { trace: RequestTrace }) {
         <dd>
           <code>{trace.errorCode ?? "—"}</code>
         </dd>
-        <dt>x-transaction-id</dt>
-        <dd>
-          <code className="trace-txn">
-            {trace.transactionId ?? "(not present in response headers)"}
-          </code>
-        </dd>
         {trace.tokenDebug && (
           <>
             <dt>Token (debug)</dt>
@@ -72,24 +72,30 @@ function TracePanel({ trace }: { trace: RequestTrace }) {
           {trace.errorMessage ?? trace.errorBody ?? "—"}
         </dd>
       </dl>
-      {trace.errorBody &&
-        trace.errorBody !== trace.errorMessage && (
-          <details className="trace-raw">
-            <summary>Full error response body</summary>
-            <pre>{trace.errorBody}</pre>
-          </details>
-        )}
-      {trace.responseHeaders &&
-        Object.keys(trace.responseHeaders).length > 0 && (
-          <details className="trace-raw">
-            <summary>All response headers</summary>
-            <pre>
-              {Object.entries(trace.responseHeaders)
-                .map(([k, v]) => `${k}: ${v}`)
-                .join("\n")}
-            </pre>
-          </details>
-        )}
+
+      <p className="trace-title" style={{ marginTop: 16 }}>
+        Response headers ({headerEntries.length})
+      </p>
+      {headerEntries.length === 0 ? (
+        <p className="trace-msg" style={{ color: "var(--muted)", margin: 0 }}>
+          No response headers were exposed by the runtime (x-transaction-id was
+          not among them). This often happens when the API never set the header
+          on this failure path, or the server fetch layer did not surface it.
+        </p>
+      ) : (
+        <pre className="trace-headers">
+          {headerEntries.map(([k, v]) => `${k}: ${v}`).join("\n")}
+        </pre>
+      )}
+
+      {trace.errorBody && (
+        <>
+          <p className="trace-title" style={{ marginTop: 16 }}>
+            Full error response body
+          </p>
+          <pre className="trace-headers">{trace.errorBody}</pre>
+        </>
+      )}
     </div>
   );
 }
