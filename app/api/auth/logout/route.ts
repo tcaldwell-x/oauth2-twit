@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   COOKIE_ACCESS_TOKEN,
-  COOKIE_TRACE,
+  COOKIE_TOKEN_META,
 } from "@/lib/oauth";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +16,7 @@ function clearAndRedirect(request: Request) {
 
   const response = NextResponse.redirect(home.toString(), { status: 303 });
   response.cookies.delete(COOKIE_ACCESS_TOKEN);
+  response.cookies.delete(COOKIE_TOKEN_META);
   // Keep COOKIE_TRACE if present so the UI can still render the failure panel.
   return response;
 }

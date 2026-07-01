@@ -12,8 +12,10 @@ import crypto from "crypto";
  * `x-transaction-id` plus the full error body and HTTP status in the UI.
  */
 export const X_AUTHORIZE_URL = "https://twitter.com/i/oauth2/authorize";
-export const X_TOKEN_URL = "https://api.twitter.com/2/oauth2/token";
-export const X_USERS_ME_URL = "https://api.twitter.com/2/users/me";
+// Token + user lookup on the current API host (api.x.com). Authorize stays on
+// twitter.com per product requirement.
+export const X_TOKEN_URL = "https://api.x.com/2/oauth2/token";
+export const X_USERS_ME_URL = "https://api.x.com/2/users/me";
 
 // Scopes needed to log in and read the authenticated user's profile.
 // `offline.access` is included so a refresh token is returned.
@@ -22,8 +24,42 @@ export const X_SCOPES = ["tweet.read", "users.read", "offline.access"];
 export const COOKIE_VERIFIER = "x_oauth_code_verifier";
 export const COOKIE_STATE = "x_oauth_state";
 export const COOKIE_ACCESS_TOKEN = "x_access_token";
+/** Scope string returned by the token endpoint (for debugging 401s). */
+export const COOKIE_TOKEN_META = "x_token_meta";
 /** Short-lived cookie used to pass a failed-request trace to the UI. */
 export const COOKIE_TRACE = "x_oauth_trace";
+
+/** Encode access token for safe cookie storage (avoids `;` `,` truncation). */
+export function encodeAccessTokenCookie(token: string): string {
+  return encodeURIComponent(token.trim());
+}
+
+/** Decode access token from cookie; tolerates legacy unencoded values. */
+export function decodeAccessTokenCookie(value: string): string {
+  try {
+    return decodeURIComponent(value).trim();
+  } catch {
+    return value.trim();
+  }
+}
+
+export interface TokenMeta {
+  token_type: string;
+  scope: string;
+  expires_in: number;
+}
+
+export function encodeTokenMetaCookie(meta: TokenMeta): string {
+  return encodeURIComponent(JSON.stringify(meta));
+}
+
+export function decodeTokenMetaCookie(value: string): TokenMeta | null {
+  try {
+    return JSON.parse(decodeURIComponent(value)) as TokenMeta;
+  } catch {
+    return null;
+  }
+}
 
 /** Sent on every outbound X API / OAuth request to enable full tracing. */
 export const TRACE_REQUEST_HEADERS = {
@@ -129,6 +165,8 @@ export interface RequestTrace {
   errorMessage: string | null;
   /** Non-sensitive token diagnostics when auth failed (length / prefix only). */
   tokenDebug?: string | null;
+  /** Scope / token_type from the token endpoint, when known. */
+  tokenMeta?: TokenMeta | null;
 }
 
 /**
@@ -264,7 +302,7 @@ async function buildFailureTrace(
   url: string,
   res: Response | null,
   networkError?: unknown,
-  extras?: { tokenDebug?: string | null }
+  extras?: { tokenDebug?: string | null; tokenMeta?: TokenMeta | null }
 ): Promise<RequestTrace> {
   if (!res) {
     const msg =
@@ -283,6 +321,7 @@ async function buildFailureTrace(
       errorCode: "network_error",
       errorMessage: msg,
       tokenDebug: extras?.tokenDebug ?? null,
+      tokenMeta: extras?.tokenMeta ?? null,
     };
   }
 
@@ -303,6 +342,7 @@ async function buildFailureTrace(
     errorCode,
     errorMessage,
     tokenDebug: extras?.tokenDebug ?? null,
+    tokenMeta: extras?.tokenMeta ?? null,
   };
 }
 
@@ -387,10 +427,14 @@ export interface XUser {
  * Uses the user-context OAuth 2.0 access token from the PKCE flow
  * (not an app-only bearer token from the developer portal).
  */
-export async function fetchMe(accessToken: string): Promise<XUser> {
+export async function fetchMe(
+  accessToken: string,
+  tokenMeta?: TokenMeta | null
+): Promise<XUser> {
   // Guard against cookie whitespace / encoding artifacts.
   const token = accessToken.trim();
   const tokenDebug = tokenDebugSummary(token);
+  const extras = { tokenDebug, tokenMeta: tokenMeta ?? null };
 
   const url = new URL(X_USERS_ME_URL);
   url.searchParams.set(
@@ -401,14 +445,17 @@ export async function fetchMe(accessToken: string): Promise<XUser> {
   const requestUrl = url.toString();
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
+    Accept: "application/json",
     ...TRACE_REQUEST_HEADERS,
   };
 
   let res: Response;
   try {
     res = await fetch(requestUrl, {
+      method: "GET",
       headers,
       cache: "no-store",
+      redirect: "manual",
     });
   } catch (e) {
     throw new TracedRequestError(
@@ -418,7 +465,7 @@ export async function fetchMe(accessToken: string): Promise<XUser> {
         requestUrl,
         null,
         e,
-        { tokenDebug }
+        extras
       )
     );
   }
@@ -431,8 +478,10 @@ export async function fetchMe(accessToken: string): Promise<XUser> {
       let retry: Response | null = null;
       try {
         retry = await fetch(retryUrl, {
+          method: "GET",
           headers,
           cache: "no-store",
+          redirect: "manual",
         });
         if (retry.ok) {
           const json = (await retry.json()) as { data: XUser };
@@ -450,16 +499,21 @@ export async function fetchMe(accessToken: string): Promise<XUser> {
             retryUrl,
             retry,
             undefined,
-            { tokenDebug }
+            extras
           )
         );
       }
     }
 
     throw new TracedRequestError(
-      await buildFailureTrace("GET /2/users/me", "GET", requestUrl, res, undefined, {
-        tokenDebug,
-      })
+      await buildFailureTrace(
+        "GET /2/users/me",
+        "GET",
+        requestUrl,
+        res,
+        undefined,
+        extras
+      )
     );
   }
 

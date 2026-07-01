@@ -3,9 +3,12 @@ import { cookies } from "next/headers";
 import {
   COOKIE_ACCESS_TOKEN,
   COOKIE_STATE,
+  COOKIE_TOKEN_META,
   COOKIE_TRACE,
   COOKIE_VERIFIER,
   TracedRequestError,
+  encodeAccessTokenCookie,
+  encodeTokenMetaCookie,
   encodeTraceCookie,
   exchangeCodeForToken,
   getRedirectUri,
@@ -49,18 +52,29 @@ export async function GET(request: Request) {
 
     const response = NextResponse.redirect(home.toString());
 
-    // Persist the access token in an httpOnly cookie. Clear the temporary
-    // PKCE/state cookies now that the exchange succeeded.
-    // Store the raw token; Next cookie serialization handles safe characters.
-    // Trim in case the token endpoint ever returns surrounding whitespace.
-    const accessToken = token.access_token.trim();
-    response.cookies.set(COOKIE_ACCESS_TOKEN, accessToken, {
+    // Persist the access token (URI-encoded so cookie parsers can't truncate
+    // on `;` / `,`) plus non-secret token metadata for 401 debugging.
+    const cookieOpts = {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
+      sameSite: "lax" as const,
       path: "/",
       maxAge: token.expires_in ?? 60 * 60 * 2,
-    });
+    };
+    response.cookies.set(
+      COOKIE_ACCESS_TOKEN,
+      encodeAccessTokenCookie(token.access_token),
+      cookieOpts
+    );
+    response.cookies.set(
+      COOKIE_TOKEN_META,
+      encodeTokenMetaCookie({
+        token_type: token.token_type,
+        scope: token.scope,
+        expires_in: token.expires_in,
+      }),
+      cookieOpts
+    );
     response.cookies.delete(COOKIE_VERIFIER);
     response.cookies.delete(COOKIE_STATE);
     response.cookies.delete(COOKIE_TRACE);

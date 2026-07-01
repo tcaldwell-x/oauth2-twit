@@ -2,8 +2,11 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import {
   COOKIE_ACCESS_TOKEN,
+  COOKIE_TOKEN_META,
   COOKIE_TRACE,
   TracedRequestError,
+  decodeAccessTokenCookie,
+  decodeTokenMetaCookie,
   decodeTraceCookie,
   encodeTraceCookie,
   fetchMe,
@@ -67,6 +70,18 @@ function TracePanel({ trace }: { trace: RequestTrace }) {
             </dd>
           </>
         )}
+        {trace.tokenMeta && (
+          <>
+            <dt>Token type</dt>
+            <dd>
+              <code>{trace.tokenMeta.token_type || "—"}</code>
+            </dd>
+            <dt>Granted scopes</dt>
+            <dd>
+              <code>{trace.tokenMeta.scope || "(none returned)"}</code>
+            </dd>
+          </>
+        )}
         <dt>Error message</dt>
         <dd className="trace-msg">
           {trace.errorMessage ?? trace.errorBody ?? "—"}
@@ -114,8 +129,8 @@ function LoginView({
         This sample demonstrates the X API OAuth 2.0 Authorization Code flow
         with PKCE. Sign in to view your account info from{" "}
         <code>GET /2/users/me</code>. Every outbound request sends{" "}
-        <code>X-B3-Flags: 1</code>; failures show the response{" "}
-        <code>x-transaction-id</code>, status, and full error body below.
+        <code>X-B3-Flags: 1</code>; failures show all response headers, status,
+        and the full error body below.
       </p>
       {error && (
         <div className="error">
@@ -196,14 +211,19 @@ export default async function Home({
 }) {
   const { error } = await searchParams;
   const cookieStore = await cookies();
-  const accessToken = cookieStore.get(COOKIE_ACCESS_TOKEN)?.value;
+  const accessTokenRaw = cookieStore.get(COOKIE_ACCESS_TOKEN)?.value;
+  const accessToken = accessTokenRaw
+    ? decodeAccessTokenCookie(accessTokenRaw)
+    : undefined;
+  const tokenMetaRaw = cookieStore.get(COOKIE_TOKEN_META)?.value;
+  const tokenMeta = tokenMetaRaw ? decodeTokenMetaCookie(tokenMetaRaw) : null;
   const traceCookie = cookieStore.get(COOKIE_TRACE)?.value;
   const cookieTrace = traceCookie ? decodeTraceCookie(traceCookie) : null;
 
   let content;
   if (accessToken) {
     try {
-      const user = await fetchMe(accessToken);
+      const user = await fetchMe(accessToken, tokenMeta);
       content = <ProfileView user={user} />;
     } catch (e) {
       console.error(e);

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   COOKIE_ACCESS_TOKEN,
+  COOKIE_TOKEN_META,
   COOKIE_TRACE,
   decodeTraceCookie,
 } from "@/lib/oauth";
@@ -22,6 +23,7 @@ export async function GET(request: Request) {
 
   const response = NextResponse.redirect(home.toString(), { status: 303 });
   response.cookies.delete(COOKIE_ACCESS_TOKEN);
+  response.cookies.delete(COOKIE_TOKEN_META);
 
   if (traceParam && decodeTraceCookie(traceParam)) {
     response.cookies.set(COOKIE_TRACE, traceParam, {
