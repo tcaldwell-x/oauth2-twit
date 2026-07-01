@@ -1,5 +1,13 @@
 import { cookies } from "next/headers";
-import { COOKIE_ACCESS_TOKEN, fetchMe, type XUser } from "@/lib/oauth";
+import {
+  COOKIE_ACCESS_TOKEN,
+  COOKIE_TRACE,
+  TracedRequestError,
+  decodeTraceCookie,
+  fetchMe,
+  type RequestTrace,
+  type XUser,
+} from "@/lib/oauth";
 
 export const dynamic = "force-dynamic";
 
@@ -9,26 +17,85 @@ const ERROR_MESSAGES: Record<string, string> = {
   missing_oauth_params: "The login response was missing required parameters.",
   token_exchange_failed:
     "Could not exchange the authorization code for a token. Check your app credentials and callback URL.",
+  users_me_failed:
+    "Signed in, but GET /2/users/me failed. The access token may be invalid or the app may lack the required scopes.",
 };
 
 function formatNumber(n: number): string {
   return new Intl.NumberFormat("en-US", { notation: "compact" }).format(n);
 }
 
-function LoginView({ error }: { error?: string }) {
+/** Renders the outbound request trace for a failed X API / OAuth call. */
+function TracePanel({ trace }: { trace: RequestTrace }) {
   return (
-    <div className="card">
+    <div className="trace" role="region" aria-label="Request trace">
+      <p className="trace-title">Request trace</p>
+      <dl className="trace-grid">
+        <dt>Step</dt>
+        <dd>{trace.label}</dd>
+        <dt>Request</dt>
+        <dd>
+          <code>
+            {trace.method} {trace.url}
+          </code>
+        </dd>
+        <dt>Request header</dt>
+        <dd>
+          <code>X-B3-Flags: {trace.requestHeaders["X-B3-Flags"]}</code>
+        </dd>
+        <dt>HTTP status</dt>
+        <dd>
+          <code>{trace.status != null ? String(trace.status) : "—"}</code>
+        </dd>
+        <dt>Error code</dt>
+        <dd>
+          <code>{trace.errorCode ?? "—"}</code>
+        </dd>
+        <dt>x-transaction-id</dt>
+        <dd>
+          <code className="trace-txn">
+            {trace.transactionId ?? "(not present in response headers)"}
+          </code>
+        </dd>
+        <dt>Error message</dt>
+        <dd className="trace-msg">
+          {trace.errorMessage ?? trace.errorBody ?? "—"}
+        </dd>
+      </dl>
+      {trace.errorBody &&
+        trace.errorBody !== trace.errorMessage && (
+          <details className="trace-raw">
+            <summary>Full error response body</summary>
+            <pre>{trace.errorBody}</pre>
+          </details>
+        )}
+    </div>
+  );
+}
+
+function LoginView({
+  error,
+  trace,
+}: {
+  error?: string;
+  trace?: RequestTrace | null;
+}) {
+  return (
+    <div className="card card-wide">
       <h1 className="title">Login with X</h1>
       <p className="subtitle">
         This sample demonstrates the X API OAuth 2.0 Authorization Code flow
         with PKCE. Sign in to view your account info from{" "}
-        <code>GET /2/users/me</code>.
+        <code>GET /2/users/me</code>. Every outbound request sends{" "}
+        <code>X-B3-Flags: 1</code>; failures show the response{" "}
+        <code>x-transaction-id</code>, status, and full error body below.
       </p>
       {error && (
         <div className="error">
           {ERROR_MESSAGES[error] ?? `Login error: ${error}`}
         </div>
       )}
+      {trace && <TracePanel trace={trace} />}
       <a className="btn btn-primary" href="/api/auth/login">
         Sign in with X
       </a>
@@ -103,6 +170,8 @@ export default async function Home({
   const { error } = await searchParams;
   const cookieStore = await cookies();
   const accessToken = cookieStore.get(COOKIE_ACCESS_TOKEN)?.value;
+  const traceCookie = cookieStore.get(COOKIE_TRACE)?.value;
+  const cookieTrace = traceCookie ? decodeTraceCookie(traceCookie) : null;
 
   let content;
   if (accessToken) {
@@ -111,11 +180,25 @@ export default async function Home({
       content = <ProfileView user={user} />;
     } catch (e) {
       console.error(e);
-      // Token is likely expired/invalid — fall back to the login view.
-      content = <LoginView error="token_exchange_failed" />;
+      const trace =
+        e instanceof TracedRequestError ? e.trace : cookieTrace;
+      // Token is likely expired/invalid — fall back to the login view with
+      // the full request trace so support can use x-transaction-id.
+      content = (
+        <LoginView
+          error="users_me_failed"
+          trace={trace}
+        />
+      );
     }
   } else {
-    content = <LoginView error={error} />;
+    // Only surface the cookie-backed trace when we actually failed an OAuth step
+    // (avoids showing a stale trace on a normal visit).
+    const showTrace =
+      error === "token_exchange_failed" || error === "users_me_failed"
+        ? cookieTrace
+        : null;
+    content = <LoginView error={error} trace={showTrace} />;
   }
 
   return <main className="container">{content}</main>;

@@ -38,6 +38,10 @@ body {
   padding: 32px;
 }
 
+.card-wide {
+  max-width: 560px;
+}
+
 .title {
   font-size: 22px;
   font-weight: 700;
@@ -154,4 +158,82 @@ body {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 2px 6px;
+}
+
+/* Failed-request trace panel (X-B3-Flags / x-transaction-id) */
+.trace {
+  background: #0a0f14;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 20px;
+  font-size: 13px;
+}
+
+.trace-title {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.trace-grid {
+  display: grid;
+  grid-template-columns: minmax(110px, auto) 1fr;
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.trace-grid dt {
+  margin: 0;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.trace-grid dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.trace-grid code,
+.trace-txn {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+}
+
+.trace-msg {
+  white-space: pre-wrap;
+  line-height: 1.45;
+}
+
+.trace-raw {
+  margin-top: 12px;
+  color: var(--muted);
+}
+
+.trace-raw summary {
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 8px;
+}
+
+.trace-raw pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text);
 }

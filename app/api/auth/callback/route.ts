@@ -3,7 +3,10 @@ import { cookies } from "next/headers";
 import {
   COOKIE_ACCESS_TOKEN,
   COOKIE_STATE,
+  COOKIE_TRACE,
   COOKIE_VERIFIER,
+  TracedRequestError,
+  encodeTraceCookie,
   exchangeCodeForToken,
   getRedirectUri,
 } from "@/lib/oauth";
@@ -57,11 +60,28 @@ export async function GET(request: Request) {
     });
     response.cookies.delete(COOKIE_VERIFIER);
     response.cookies.delete(COOKIE_STATE);
+    response.cookies.delete(COOKIE_TRACE);
 
     return response;
   } catch (e) {
     console.error(e);
     home.searchParams.set("error", "token_exchange_failed");
-    return NextResponse.redirect(home.toString());
+    const response = NextResponse.redirect(home.toString());
+
+    // Pass the full request trace (incl. x-transaction-id + body + status)
+    // to the home page via a short-lived cookie so the UI can display it.
+    if (e instanceof TracedRequestError) {
+      response.cookies.set(COOKIE_TRACE, encodeTraceCookie(e.trace), {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "lax",
+        path: "/",
+        maxAge: 60 * 5, // 5 minutes — long enough to render once
+      });
+    }
+
+    response.cookies.delete(COOKIE_VERIFIER);
+    response.cookies.delete(COOKIE_STATE);
+    return response;
   }
 }
