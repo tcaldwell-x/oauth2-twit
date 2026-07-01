@@ -119,12 +119,16 @@ export interface RequestTrace {
   status: number | null;
   /** Value of the `x-transaction-id` response header (support debugging). */
   transactionId: string | null;
+  /** All response headers (lower-cased names) for debugging missing txn ids. */
+  responseHeaders: Record<string, string> | null;
   /** Full response body text on failure. */
   errorBody: string | null;
   /** Parsed error code when the body is JSON with `error` / `errors`. */
   errorCode: string | null;
   /** Parsed error message when available. */
   errorMessage: string | null;
+  /** Non-sensitive token diagnostics when auth failed (length / prefix only). */
+  tokenDebug?: string | null;
 }
 
 /**
@@ -148,16 +152,40 @@ export class TracedRequestError extends Error {
   }
 }
 
-function getHeaderIgnoreCase(
+/** Snapshot every response header (names lower-cased). */
+function snapshotHeaders(headers: Headers): Record<string, string> {
+  const out: Record<string, string> = {};
+  headers.forEach((value, key) => {
+    out[key.toLowerCase()] = value;
+  });
+  return out;
+}
+
+/** Prefer x-transaction-id; fall back to any header whose name mentions transaction. */
+function extractTransactionId(
   headers: Headers,
-  name: string
+  snapshot: Record<string, string>
 ): string | null {
-  // Headers.get is case-insensitive, but we also try the common variants.
-  return (
-    headers.get(name) ??
-    headers.get(name.toLowerCase()) ??
-    headers.get(name.toUpperCase())
-  );
+  const direct =
+    headers.get("x-transaction-id") ??
+    snapshot["x-transaction-id"] ??
+    snapshot["x-transactionid"];
+  if (direct) return direct;
+
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (key.includes("transaction") && value) return value;
+  }
+  return null;
+}
+
+/** Safe token summary for the UI (never the full secret). */
+export function tokenDebugSummary(accessToken: string | undefined | null): string {
+  if (!accessToken) return "missing";
+  const t = accessToken.trim();
+  if (!t) return "empty";
+  const prefix = t.slice(0, 8);
+  const suffix = t.length > 12 ? t.slice(-4) : "";
+  return `len=${t.length} prefix=${prefix}…${suffix}`;
 }
 
 /** Pull a useful error code + message out of a typical X API error body. */
@@ -221,7 +249,8 @@ async function buildFailureTrace(
   method: string,
   url: string,
   res: Response | null,
-  networkError?: unknown
+  networkError?: unknown,
+  extras?: { tokenDebug?: string | null }
 ): Promise<RequestTrace> {
   if (!res) {
     const msg =
@@ -235,17 +264,18 @@ async function buildFailureTrace(
       requestHeaders: { "X-B3-Flags": "1" },
       status: null,
       transactionId: null,
+      responseHeaders: null,
       errorBody: msg,
       errorCode: "network_error",
       errorMessage: msg,
+      tokenDebug: extras?.tokenDebug ?? null,
     };
   }
 
   const text = await res.text();
   const { errorCode, errorMessage } = parseErrorBody(text);
-  const transactionId =
-    getHeaderIgnoreCase(res.headers, "x-transaction-id") ??
-    getHeaderIgnoreCase(res.headers, "X-Transaction-Id");
+  const responseHeaders = snapshotHeaders(res.headers);
+  const transactionId = extractTransactionId(res.headers, responseHeaders);
 
   return {
     label,
@@ -254,9 +284,11 @@ async function buildFailureTrace(
     requestHeaders: { "X-B3-Flags": "1" },
     status: res.status,
     transactionId,
+    responseHeaders,
     errorBody: text || null,
     errorCode,
     errorMessage,
+    tokenDebug: extras?.tokenDebug ?? null,
   };
 }
 
@@ -335,8 +367,17 @@ export interface XUser {
   };
 }
 
-/** Fetch the authenticated user's profile via GET /2/users/me. */
+/**
+ * Fetch the authenticated user's profile via GET /2/users/me.
+ *
+ * Uses the user-context OAuth 2.0 access token from the PKCE flow
+ * (not an app-only bearer token from the developer portal).
+ */
 export async function fetchMe(accessToken: string): Promise<XUser> {
+  // Guard against cookie whitespace / encoding artifacts.
+  const token = accessToken.trim();
+  const tokenDebug = tokenDebugSummary(token);
+
   const url = new URL(X_USERS_ME_URL);
   url.searchParams.set(
     "user.fields",
@@ -344,13 +385,15 @@ export async function fetchMe(accessToken: string): Promise<XUser> {
   );
 
   const requestUrl = url.toString();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    ...TRACE_REQUEST_HEADERS,
+  };
+
   let res: Response;
   try {
     res = await fetch(requestUrl, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        ...TRACE_REQUEST_HEADERS,
-      },
+      headers,
       cache: "no-store",
     });
   } catch (e) {
@@ -360,14 +403,49 @@ export async function fetchMe(accessToken: string): Promise<XUser> {
         "GET",
         requestUrl,
         null,
-        e
+        e,
+        { tokenDebug }
       )
     );
   }
 
   if (!res.ok) {
+    // If user.fields triggered a tier/permission issue, retry without them so
+    // the user at least gets the default id/name/username payload.
+    if (res.status === 401 || res.status === 403) {
+      const retryUrl = X_USERS_ME_URL;
+      let retry: Response | null = null;
+      try {
+        retry = await fetch(retryUrl, {
+          headers,
+          cache: "no-store",
+        });
+        if (retry.ok) {
+          const json = (await retry.json()) as { data: XUser };
+          return json.data;
+        }
+      } catch {
+        // fall through to original failure
+      }
+      // Prefer the retry response for the trace when it also failed (cleaner URL).
+      if (retry && !retry.ok) {
+        throw new TracedRequestError(
+          await buildFailureTrace(
+            "GET /2/users/me",
+            "GET",
+            retryUrl,
+            retry,
+            undefined,
+            { tokenDebug }
+          )
+        );
+      }
+    }
+
     throw new TracedRequestError(
-      await buildFailureTrace("GET /2/users/me", "GET", requestUrl, res)
+      await buildFailureTrace("GET /2/users/me", "GET", requestUrl, res, undefined, {
+        tokenDebug,
+      })
     );
   }
 

@@ -51,7 +51,10 @@ export async function GET(request: Request) {
 
     // Persist the access token in an httpOnly cookie. Clear the temporary
     // PKCE/state cookies now that the exchange succeeded.
-    response.cookies.set(COOKIE_ACCESS_TOKEN, token.access_token, {
+    // Store the raw token; Next cookie serialization handles safe characters.
+    // Trim in case the token endpoint ever returns surrounding whitespace.
+    const accessToken = token.access_token.trim();
+    response.cookies.set(COOKIE_ACCESS_TOKEN, accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",

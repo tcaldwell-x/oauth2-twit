@@ -1,9 +1,11 @@
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import {
   COOKIE_ACCESS_TOKEN,
   COOKIE_TRACE,
   TracedRequestError,
   decodeTraceCookie,
+  encodeTraceCookie,
   fetchMe,
   type RequestTrace,
   type XUser,
@@ -18,7 +20,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   token_exchange_failed:
     "Could not exchange the authorization code for a token. Check your app credentials and callback URL.",
   users_me_failed:
-    "Signed in, but GET /2/users/me failed. The access token may be invalid or the app may lack the required scopes.",
+    "Signed in, but GET /2/users/me returned Unauthorized (401). The access token is missing user context, expired, corrupted in the cookie, or the app is missing the users.read + tweet.read scopes. Sign in again after checking credentials in the X developer portal.",
 };
 
 function formatNumber(n: number): string {
@@ -57,6 +59,14 @@ function TracePanel({ trace }: { trace: RequestTrace }) {
             {trace.transactionId ?? "(not present in response headers)"}
           </code>
         </dd>
+        {trace.tokenDebug && (
+          <>
+            <dt>Token (debug)</dt>
+            <dd>
+              <code>{trace.tokenDebug}</code>
+            </dd>
+          </>
+        )}
         <dt>Error message</dt>
         <dd className="trace-msg">
           {trace.errorMessage ?? trace.errorBody ?? "—"}
@@ -67,6 +77,17 @@ function TracePanel({ trace }: { trace: RequestTrace }) {
           <details className="trace-raw">
             <summary>Full error response body</summary>
             <pre>{trace.errorBody}</pre>
+          </details>
+        )}
+      {trace.responseHeaders &&
+        Object.keys(trace.responseHeaders).length > 0 && (
+          <details className="trace-raw">
+            <summary>All response headers</summary>
+            <pre>
+              {Object.entries(trace.responseHeaders)
+                .map(([k, v]) => `${k}: ${v}`)
+                .join("\n")}
+            </pre>
           </details>
         )}
     </div>
@@ -180,16 +201,16 @@ export default async function Home({
       content = <ProfileView user={user} />;
     } catch (e) {
       console.error(e);
+      // Server Components can't set cookies — bounce through /api/auth/fail to
+      // clear the bad access token, stash the request trace, and show the UI.
       const trace =
         e instanceof TracedRequestError ? e.trace : cookieTrace;
-      // Token is likely expired/invalid — fall back to the login view with
-      // the full request trace so support can use x-transaction-id.
-      content = (
-        <LoginView
-          error="users_me_failed"
-          trace={trace}
-        />
-      );
+      if (trace) {
+        redirect(
+          `/api/auth/fail?error=users_me_failed&trace=${encodeURIComponent(encodeTraceCookie(trace))}`
+        );
+      }
+      redirect("/api/auth/logout?error=users_me_failed");
     }
   } else {
     // Only surface the cookie-backed trace when we actually failed an OAuth step
